@@ -1,3 +1,4 @@
+
 # cython: boundscheck=False
 # cython: wraparound=False
 # cython: nonecheck=False
@@ -9,7 +10,6 @@ cimport cython
 from libc.math cimport sqrt
 
 cnp.import_array()
-
 @cython.boundscheck(False)
 @cython.wraparound(False)
 def generate_eds_mask_fast(cnp.uint8_t[:, :] eds_gray, 
@@ -175,3 +175,30 @@ def create_circle_mask_fast(int height, int width, int center_x, int center_y, i
                 mask[y, x] = 255
     
     return np.asarray(mask)
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def generate_intragranular_mask_fast(cnp.uint8_t[:, :] eds_gray, 
+                                   cnp.uint8_t[:, :] intergranular_mask,
+                                   cnp.uint8_t[:, :] exclusion_mask,
+                                   double max_eds,
+                                   double threshold_percent):
+    """
+    Fast Cython implementation of intragranular EDS mask generation
+    """
+    cdef int height = eds_gray.shape[0]
+    cdef int width = eds_gray.shape[1]
+    cdef cnp.uint8_t[:, :] intragranular_mask = np.zeros((height, width), dtype=np.uint8)
+    
+    cdef double threshold_value = (threshold_percent / 100.0) * max_eds * (255.0 / max_eds)
+    cdef int y, x
+    
+    for y in range(height):
+        for x in range(width):
+            # If pixel is below threshold AND not in intergranular mask AND not excluded
+            if (eds_gray[y, x] < threshold_value and 
+                intergranular_mask[y, x] == 0 and
+                (exclusion_mask.shape[0] == 0 or exclusion_mask[y, x] == 0)):
+                intragranular_mask[y, x] = 255
+    
+    return np.asarray(intragranular_mask)
