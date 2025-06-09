@@ -1,20 +1,21 @@
-import numba_functions as nf
-import pandas as pd
-import cv2
-import numpy as np
-from io import StringIO
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from PIL import Image, ImageTk
-from tkinter import ttk
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import os
-from PIL import Image, ImageTk
+import tkinter as tk
+from io import StringIO
+from tkinter import filedialog, messagebox, ttk
+
+import cv2
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from numba import jit
+from PIL import Image, ImageTk
+
+import numba_functions as nf
 
 
 class ToolTip:  # {{{
+
     """Simple tooltip implementation"""
 
     def __init__(self, widget, text):
@@ -485,13 +486,13 @@ class EDSAnalyzer:  # {{{
 
     def generate_eds_mask(self, threshold_percent):
         """Generate EDS mask by expanding circles around SEM mask pixels"""
-        self.eds_mask = nf.fast_generate_eds_mask_python(
+        self.eds_mask = nf.fast_generate_eds_mask(
             threshold_percent, self.eds_original, self.max_eds, self.sem_mask,
-            self.eds_gray)
+            self.eds_gray, self.exclusion_mask)
 
     def generate_intragranular_mask(self, threshold_percent):
         """Generate intragranular mask for pixels below threshold but not in intergranular mask"""
-        self.intragranular_mask = nf.fast_generate_intragranular_mask_python(
+        self.intragranular_mask = nf.fast_generate_intragranular_mask(
             threshold_percent, self.eds_original, self.eds_gray, self.max_eds, self.eds_mask, self. exclusion_mask, self.intragranular_mask)
 
     def apply_masks(self):
@@ -735,35 +736,26 @@ Press \'q\' to quit.'
             depth_pixels = np.arange(height)
             depth_um = depth_pixels / self.pixels_per_micrometer
 
-            # Calculate total depletion per row
+            # Calculate depletion per row
             total_depletion = []
             intergranular_depletion = []
             intragranular_depletion = []
 
             for row in range(height):
-                #  # Total depletion for this row
-                #  row_values = eds_gray[row, :] / 255.0 * self.max_eds
-                #  total_mean = np.mean(row_values) / self.mean_eds * 100
-                #  # Convert to depletion percentage
-                #  total_depletion.append(100 - total_mean)
-
-                # Intergranular depletion (only pixels in eds_mask)
-                if self.eds_mask.shape != (0, 0):
+                # Intergranular depletion (pixels in eds_mask)
+                if self.eds_mask.shape != (0, 0) and np.any(self.eds_mask[row, :]):
                     intergranular_pixels = eds_gray[row,
                                                     :][self.eds_mask[row, :]]
-                    if len(intergranular_pixels) > 0:
-                        inter_mean = np.mean(
-                            intergranular_pixels) / 255.0 * self.max_eds / self.mean_eds * 100
-                        intergranular_depletion.append(100 - inter_mean)
-                    else:
-                        intergranular_depletion.append(0)
+                    inter_mean = np.mean(
+                        intergranular_pixels) / 255.0 * self.max_eds / self.mean_eds * 100
+                    intergranular_depletion.append(100 - inter_mean)
                 else:
                     intergranular_depletion.append(0)
 
-                # Intragranular depletion (only pixels in intragranular_mask)
-                if self.intragranular_mask.shape != (0, 0):
+                # Intragranular depletion (all other pixels not in eds_mask)
+                if self.eds_mask.shape != (0, 0):
                     intragranular_pixels = eds_gray[row,
-                                                    :][self.intragranular_mask[row, :]]
+                                                    :][~self.eds_mask[row, :]]
                     if len(intragranular_pixels) > 0:
                         intra_mean = np.mean(
                             intragranular_pixels) / 255.0 * self.max_eds / self.mean_eds * 100
@@ -771,19 +763,11 @@ Press \'q\' to quit.'
                     else:
                         intragranular_depletion.append(0)
                 else:
-                    intragranular_depletion.append(0)
+                    # If no mask, all pixels are considered intragranular
+                    intragranular_depletion.append(total_depletion[-1])
 
-            total_depletion = np.array(
-                intergranular_depletion + intragranular_depletion)
-
-            # Verify sum consistency
-            combined_depletion = np.array(
-                intergranular_depletion) + np.array(intragranular_depletion)
-            if not np.allclose(combined_depletion, total_depletion, rtol=0.1):
-                print("Sum does not match")
-                #  raise ValueError(
-                #      "Sum of intergranular and intragranular depletion does not match total depletion")
-
+            total_depletion = [inter + intra for inter,
+                               intra in zip(intergranular_depletion, intragranular_depletion)]
             # Store data for saving
             self.plot_data = {
                 'depth_um': depth_um,
@@ -792,36 +776,37 @@ Press \'q\' to quit.'
                 'intragranular_depletion': intragranular_depletion
             }
 
-            # Plot 1: Total depletion
-            self.axes[0, 0].plot(depth_um, total_depletion, 'b-', linewidth=2)
+            # Plot 1: Total depletion (scatter plot)
+            self.axes[0, 0].scatter(
+                depth_um, total_depletion, c='blue', alpha=0.7, s=20)
             self.axes[0, 0].set_title('Total Depletion vs Depth')
             self.axes[0, 0].set_xlabel('Depth (μm)')
             self.axes[0, 0].set_ylabel('Total Depletion (%)')
             self.axes[0, 0].grid(True, alpha=0.3)
 
-            # Plot 2: Intergranular depletion
-            self.axes[0, 1].plot(
-                depth_um, intergranular_depletion, 'g-', linewidth=2)
+            # Plot 2: Intergranular depletion (scatter plot)
+            self.axes[0, 1].scatter(
+                depth_um, intergranular_depletion, c='green', alpha=0.7, s=20)
             self.axes[0, 1].set_title('Intergranular Depletion vs Depth')
             self.axes[0, 1].set_xlabel('Depth (μm)')
             self.axes[0, 1].set_ylabel('Intergranular Depletion (%)')
             self.axes[0, 1].grid(True, alpha=0.3)
 
-            # Plot 3: Intragranular depletion
-            self.axes[1, 0].plot(
-                depth_um, intragranular_depletion, 'y-', linewidth=2)
+            # Plot 3: Intragranular depletion (scatter plot)
+            self.axes[1, 0].scatter(
+                depth_um, intragranular_depletion, c='orange', alpha=0.7, s=20)
             self.axes[1, 0].set_title('Intragranular Depletion vs Depth')
             self.axes[1, 0].set_xlabel('Depth (μm)')
             self.axes[1, 0].set_ylabel('Intragranular Depletion (%)')
             self.axes[1, 0].grid(True, alpha=0.3)
 
-            # Plot 4: Comparison of all three
-            self.axes[1, 1].plot(depth_um, total_depletion,
-                                 'b-', linewidth=2, label='Total')
-            self.axes[1, 1].plot(depth_um, intergranular_depletion,
-                                 'g-', linewidth=2, label='Intergranular')
-            self.axes[1, 1].plot(depth_um, intragranular_depletion,
-                                 'y-', linewidth=2, label='Intragranular')
+            # Plot 4: Comparison of all three (scatter plots)
+            self.axes[1, 1].scatter(
+                depth_um, total_depletion, c='blue', alpha=0.7, s=20, label='Total')
+            self.axes[1, 1].scatter(
+                depth_um, intergranular_depletion, c='green', alpha=0.7, s=20, label='Intergranular')
+            self.axes[1, 1].scatter(
+                depth_um, intragranular_depletion, c='orange', alpha=0.7, s=20, label='Intragranular')
             self.axes[1, 1].set_title('Depletion Comparison')
             self.axes[1, 1].set_xlabel('Depth (μm)')
             self.axes[1, 1].set_ylabel('Depletion (%)')

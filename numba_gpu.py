@@ -1,11 +1,13 @@
-import numpy as np
-from numba import cuda, roc, jit
 import math
+
+import numpy as np
+from numba import cuda, jit, roc
 
 # GPU kernel for EDS mask generation
 
 
 @cuda.jit
+
 def cuda_generate_eds_mask_kernel(threshold_value, eds_gray, max_radius, sem_mask, eds_mask):
     """CUDA kernel for generating EDS mask with circular filtering"""
     i, j = cuda.grid(2)
@@ -568,6 +570,7 @@ def fast_apply_masks(sem_data, sem_mask, exclusion_mask, eds_data, eds_mask,
 # Example usage and benchmarking
 if __name__ == "__main__":
     import time
+
 
     # Example data
     height, width = 1024, 1024
