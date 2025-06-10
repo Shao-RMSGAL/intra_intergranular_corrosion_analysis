@@ -45,71 +45,15 @@ def fast_calculate_statistics(x1, y1, x2, y2, eds_original, max_eds):
     return mean_eds, std_eds
 
 
-#  @jit(nopython=True, parallel=True)
-#  def fast_generate_eds_mask(threshold_percent, eds_original, max_eds,
-#                                    sem_mask, eds_gray):
-#      threshold_value = (threshold_percent / 100.0) * max_eds * (255.0 / max_eds)
-#      eds_mask = np.zeros(eds_original.shape[:2], dtype=np.bool_)
-
-#      # Get dimensions
-#      height, width = sem_mask.shape
-#      max_radius = min(eds_gray.shape) // 4
-
-#      # Parallelize over rows
-#      for i in prange(height):
-#          for j in range(width):
-#              if not sem_mask[i, j]:
-#                  continue
-
-#              radius = 1
-#              found = False
-
-#              while radius <= max_radius and not found:
-#                  sum_value = 0.0
-#                  count = 0
-#                  radius_sq = radius * radius
-
-#                  # Calculate average in circular region
-#                  for dy in range(-radius, radius + 1):
-#                      for dx in range(-radius, radius + 1):
-#                          dist_sq = dx*dx + dy*dy
-#                          if dist_sq <= radius_sq:
-#                              ny, nx = i + dy, j + dx
-#                              if 0 <= ny < eds_gray.shape[0] and 0 <= nx < eds_gray.shape[1]:
-#                                  sum_value += eds_gray[ny, nx]
-#                                  count += 1
-
-#                  if count > 0:
-#                      avg_value = sum_value / count
-#                      if avg_value >= threshold_value:
-#                          found = True
-#                          # Apply the circle to the mask immediately
-#                          for dy in range(-radius, radius + 1):
-#                              for dx in range(-radius, radius + 1):
-#                                  if dx*dx + dy*dy <= radius_sq:
-#                                      ny, nx = i + dy, j + dx
-#                                      if 0 <= ny < eds_mask.shape[0] and 0 <= nx < eds_mask.shape[1]:
-#                                          eds_mask[ny, nx] = True
-
-#                  radius += 1
-
-#      return eds_mask
-
-
 @jit(nopython=True, parallel=True, cache=True)
 def fast_generate_intragranular_mask(
-    threshold_percent,
     eds_original,
     eds_gray,
-    max_eds,
     eds_mask,
     exclusion_mask,
     intragranular_mask,
 ):
     intragranular_mask = np.zeros(eds_original.shape[:2], dtype=np.bool_)
-
-    # Calculate threshold value as percentage of max EDS value
-    threshold_value = (threshold_percent / 100.0) * max_eds
 
     height, width = eds_gray.shape
     has_exclusion = exclusion_mask.shape != (0, 0)
@@ -168,7 +112,7 @@ def fast_apply_masks(
 
 # Additional optimized helper functions for better performance
 @jit(nopython=True, parallel=True, cache=True)
-def fast_circular_average(eds_gray, center_points, radius):
+def fast_circular_average(eds_gray, center_points, radius, exclusion_mask):
     """Compute circular averages around multiple center points in parallel."""
     n_points = center_points.shape[0]
     averages = np.zeros(n_points)
@@ -184,7 +128,7 @@ def fast_circular_average(eds_gray, center_points, radius):
             for dx in range(-radius, radius + 1):
                 if dx * dx + dy * dy <= radius_sq:
                     ny, nx = i + dy, j + dx
-                    if 0 <= ny < eds_gray.shape[0] and 0 <= nx < eds_gray.shape[1]:
+                    if 0 <= ny < eds_gray.shape[0] and 0 <= nx < eds_gray.shape[1] and not exclusion_mask[ny, nx]:
                         sum_value += eds_gray[ny, nx]
                         count += 1
 
@@ -196,7 +140,7 @@ def fast_circular_average(eds_gray, center_points, radius):
     return averages
 
 
-@jit(nopython=True, cache=True)
+@ jit(nopython=True, cache=True)
 def fast_generate_eds_mask(
     threshold_percent, eds_original, max_eds, sem_mask, eds_gray, exclusion_mask
 ):
@@ -237,7 +181,8 @@ def fast_generate_eds_mask(
         unprocessed_array = np.array(unprocessed_points)
 
         # Compute averages for all unprocessed points at this radius
-        averages = fast_circular_average(eds_gray, unprocessed_array, radius)
+        averages = fast_circular_average(
+            eds_gray, unprocessed_array, radius, exclusion_mask)
 
         # Determine which points meet the threshold
         meets_threshold = averages >= threshold_value
@@ -263,7 +208,7 @@ def fast_generate_eds_mask(
     return eds_mask
 
 
-@jit(nopython=True, parallel=True, cache=True)
+@ jit(nopython=True, parallel=True, cache=True)
 def fast_batch_mask_update_with_exclusion(
     mask, center_points, radius, values, exclusion_mask, has_exclusion
 ):
