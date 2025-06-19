@@ -142,10 +142,10 @@ def fast_circular_average(eds_gray, center_points, radius, exclusion_mask):
 
 @ jit(nopython=True, cache=True)
 def fast_generate_eds_mask(
-    threshold_percent, eds_original, max_eds, sem_mask, eds_gray, exclusion_mask
+    threshold_percent, eds_original, mean_eds, sem_mask, eds_gray, exclusion_mask
 ):
     """Optimized version using batch processing for better parallelization."""
-    threshold_value = (threshold_percent / 100.0) * max_eds * (255.0 / max_eds)
+    threshold_value = (threshold_percent / 100.0) * mean_eds * 255.0
     eds_mask = np.zeros(eds_original.shape[:2], dtype=np.bool_)
 
     # Collect all valid center points

@@ -522,7 +522,7 @@ class EDSAnalyzer:  # {{{
     def generate_eds_mask(self, threshold_percent):
         """Generate EDS mask by expanding circles around SEM mask pixels"""
         self.eds_mask = nf.fast_generate_eds_mask(
-            threshold_percent, self.eds_original, self.max_eds, self.sem_mask,
+            threshold_percent, self.eds_original, self.mean_eds, self.sem_mask,
             self.eds_gray, self.exclusion_mask)
 
     def generate_intragranular_mask(self, threshold_percent):
@@ -800,13 +800,19 @@ Press \'q\' to quit.'
                 bin_intragranular_values = []
 
                 for row in range(start_row, end_row):
+                    total_width = len(eds_gray[row, :])
                     # Intergranular depletion (pixels in eds_mask)
                     if self.eds_mask.shape != (0, 0) and np.any(self.eds_mask[row, :]):
                         intergranular_pixels = eds_gray[row,
                                                         :][self.eds_mask[row, :]]
+                        inter_width = len(intergranular_pixels)
+                        weight = inter_width / total_width
+
+                        # Weighted mean
                         inter_mean = np.mean(
                             intergranular_pixels) / 255.0 * self.max_eds / self.mean_eds * 100
-                        bin_intergranular_values.append(100 - inter_mean)
+                        bin_intergranular_values.append(
+                            weight * (100 - inter_mean))
                     else:
                         bin_intergranular_values.append(0)
 
@@ -814,10 +820,15 @@ Press \'q\' to quit.'
                     if self.eds_mask.shape != (0, 0):
                         intragranular_pixels = eds_gray[row,
                                                         :][~self.eds_mask[row, :]]
+
+                        intra_width = len(intragranular_pixels)
+                        weight = intra_width / total_width
+
                         if len(intragranular_pixels) > 0:
                             intra_mean = np.mean(
                                 intragranular_pixels) / 255.0 * self.max_eds / self.mean_eds * 100
-                            bin_intragranular_values.append(100 - intra_mean)
+                            bin_intragranular_values.append(
+                                weight * (100 - intra_mean))
                         else:
                             bin_intragranular_values.append(0)
                     else:
@@ -888,114 +899,6 @@ Press \'q\' to quit.'
         except Exception as e:
             messagebox.showerror("Error", f"Failed to update plots: {str(e)}")
             print(e)
-
-    #  def update_plots(self):
-    #      """Update all depth analysis plots"""
-
-    #      self.update_masks()
-
-    #      if self.eds_original.shape == (0, 0) or not self.bulk_selected:
-    #          messagebox.showerror(
-    #              "Error", "EDS data and bulk content selection required")
-    #          return
-
-    #      try:
-    #          # Clear all subplots
-    #          for ax in self.axes.flat:
-    #              ax.clear()
-
-    #          # Convert EDS to grayscale and calculate row-wise statistics
-    #          eds_gray = cv2.cvtColor(self.eds_original, cv2.COLOR_BGR2GRAY)
-    #          height = eds_gray.shape[0]
-
-    #          # Calculate depth values
-    #          depth_pixels = np.arange(height)
-    #          depth_um = depth_pixels / self.pixels_per_micrometer
-
-    #          # Calculate depletion per row
-    #          total_depletion = []
-    #          intergranular_depletion = []
-    #          intragranular_depletion = []
-
-    #          for row in range(height):
-    #              # Intergranular depletion (pixels in eds_mask)
-    #              if self.eds_mask.shape != (0, 0) and np.any(self.eds_mask[row, :]):
-    #                  intergranular_pixels = eds_gray[row,
-    #                                                  :][self.eds_mask[row, :]]
-    #                  inter_mean = np.mean(
-    #                      intergranular_pixels) / 255.0 * self.max_eds / self.mean_eds * 100
-    #                  intergranular_depletion.append(100 - inter_mean)
-    #              else:
-    #                  intergranular_depletion.append(0)
-
-    #              # Intragranular depletion (all other pixels not in eds_mask)
-    #              if self.eds_mask.shape != (0, 0):
-    #                  intragranular_pixels = eds_gray[row,
-    #                                                  :][~self.eds_mask[row, :]]
-    #                  if len(intragranular_pixels) > 0:
-    #                      intra_mean = np.mean(
-    #                          intragranular_pixels) / 255.0 * self.max_eds / self.mean_eds * 100
-    #                      intragranular_depletion.append(100 - intra_mean)
-    #                  else:
-    #                      intragranular_depletion.append(0)
-    #              else:
-    #                  # If no mask, all pixels are considered intragranular
-    #                  intragranular_depletion.append(total_depletion[-1])
-
-    #          total_depletion = [inter + intra for inter,
-    #                             intra in zip(intergranular_depletion, intragranular_depletion)]
-    #          # Store data for saving
-    #          self.plot_data = {
-    #              'depth_um': depth_um,
-    #              'total_depletion': total_depletion,
-    #              'intergranular_depletion': intergranular_depletion,
-    #              'intragranular_depletion': intragranular_depletion
-    #          }
-
-    #          # Plot 1: Total depletion (scatter plot)
-    #          self.axes[0, 0].scatter(
-    #              depth_um, total_depletion, c='blue', alpha=0.7, s=20)
-    #          self.axes[0, 0].set_title('Total Depletion vs Depth')
-    #          self.axes[0, 0].set_xlabel('Depth (μm)')
-    #          self.axes[0, 0].set_ylabel('Total Depletion (%)')
-    #          self.axes[0, 0].grid(True, alpha=0.3)
-
-    #          # Plot 2: Intergranular depletion (scatter plot)
-    #          self.axes[0, 1].scatter(
-    #              depth_um, intergranular_depletion, c='green', alpha=0.7, s=20)
-    #          self.axes[0, 1].set_title('Intergranular Depletion vs Depth')
-    #          self.axes[0, 1].set_xlabel('Depth (μm)')
-    #          self.axes[0, 1].set_ylabel('Intergranular Depletion (%)')
-    #          self.axes[0, 1].grid(True, alpha=0.3)
-
-    #          # Plot 3: Intragranular depletion (scatter plot)
-    #          self.axes[1, 0].scatter(
-    #              depth_um, intragranular_depletion, c='orange', alpha=0.7, s=20)
-    #          self.axes[1, 0].set_title('Intragranular Depletion vs Depth')
-    #          self.axes[1, 0].set_xlabel('Depth (μm)')
-    #          self.axes[1, 0].set_ylabel('Intragranular Depletion (%)')
-    #          self.axes[1, 0].grid(True, alpha=0.3)
-
-    #          # Plot 4: Comparison of all three (scatter plots)
-    #          self.axes[1, 1].scatter(
-    #              depth_um, total_depletion, c='blue', alpha=0.7, s=20, label='Total')
-    #          self.axes[1, 1].scatter(
-    #              depth_um, intergranular_depletion, c='green', alpha=0.7, s=20, label='Intergranular')
-    #          self.axes[1, 1].scatter(
-    #              depth_um, intragranular_depletion, c='orange', alpha=0.7, s=20, label='Intragranular')
-    #          self.axes[1, 1].set_title('Depletion Comparison')
-    #          self.axes[1, 1].set_xlabel('Depth (μm)')
-    #          self.axes[1, 1].set_ylabel('Depletion (%)')
-    #          self.axes[1, 1].legend()
-    #          self.axes[1, 1].grid(True, alpha=0.3)
-
-    #          # Adjust layout and refresh canvas
-    #          self.fig.tight_layout()
-    #          self.plot_canvas.draw()
-
-    #      except Exception as e:
-    #          messagebox.showerror("Error", f"Failed to update plots: {str(e)}")
-    #          print(e)
 
     def save_all_data(self):
         """Save all images and plot data to files"""
