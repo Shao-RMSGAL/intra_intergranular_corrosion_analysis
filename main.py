@@ -67,6 +67,8 @@ class EDSAnalyzer:  # {{{
             self.intragranular_mask = \
             self.exclusion_mask = \
             self.current_exclusion_rect = \
+            self.uncertainty_data = \
+            self.binned_statistics = \
             np.zeros(
                 (0, 0), dtype=np.uint8)
         self.max_eds = self.mean_eds = self.std_eds = self.drawing = False
@@ -753,152 +755,225 @@ Press \'q\' to quit.'
         self.std_label.config(text=f"{self.std_eds:.2f}", fg="black")
 
     def update_plots(self):
-        """Update all depth analysis plots with binned data"""
-
+        """Update all depth analysis plots with binned data and error regions"""
+    
         self.update_masks()
-
+    
         if self.eds_original.shape == (0, 0) or not self.bulk_selected:
             messagebox.showerror(
                 "Error", "EDS data and bulk content selection required")
             return
-
+    
         try:
-
+    
             self.pixels_per_bin = int(self.pixels_per_bin_var.get())
-
+    
             # Clear all subplots
             for ax in self.axes.flat:
                 ax.clear()
-
+    
             # Convert EDS to grayscale and calculate row-wise statistics
             eds_gray = cv2.cvtColor(self.eds_original, cv2.COLOR_BGR2GRAY)
             height = eds_gray.shape[0]
-
+    
             # Calculate number of bins and create bin edges
             num_bins = height // self.pixels_per_bin
             if height % self.pixels_per_bin != 0:
                 num_bins += 1  # Include partial bin at the end
-
-            # Initialize arrays for binned data
+    
+            # Initialize arrays for binned data (means and standard deviations)
             binned_total_depletion = []
             binned_intergranular_depletion = []
             binned_intragranular_depletion = []
+            binned_total_depletion_std = []
+            binned_intergranular_depletion_std = []
+            binned_intragranular_depletion_std = []
             binned_depth_um = []
-
+    
             # Process each bin
             for bin_idx in range(num_bins):
                 start_row = bin_idx * self.pixels_per_bin
                 end_row = min((bin_idx + 1) * self.pixels_per_bin, height)
-
+    
                 # Calculate bin center for depth measurement
                 bin_center_pixel = (start_row + end_row - 1) / 2
                 bin_depth_um = bin_center_pixel / self.pixels_per_micrometer
                 binned_depth_um.append(bin_depth_um)
-
-                # Collect depletion values for this bin
+    
+                # Collect depletion values and errors for this bin
                 bin_intergranular_values = []
                 bin_intragranular_values = []
-
+                bin_intergranular_errors = []
+                bin_intragranular_errors = []
+    
                 for row in range(start_row, end_row):
                     total_width = len(eds_gray[row, :])
+                    
                     # Intergranular depletion (pixels in eds_mask)
                     if self.eds_mask.shape != (0, 0) and np.any(self.eds_mask[row, :]):
-                        intergranular_pixels = eds_gray[row,
-                                                        :][self.eds_mask[row, :]]
+                        intergranular_pixels = eds_gray[row, :][self.eds_mask[row, :]]
                         inter_width = len(intergranular_pixels)
                         weight = inter_width / total_width
-
-                        # Weighted mean
-                        inter_mean = np.mean(
-                            intergranular_pixels) / 255.0 * self.max_eds / self.mean_eds * 100
-                        bin_intergranular_values.append(
-                            weight * (100 - inter_mean))
+    
+                        # Calculate mean and std of pixel values, then convert to depletion
+                        inter_mean = np.mean(intergranular_pixels) / 255.0 * self.max_eds / self.mean_eds * 100
+                        inter_std = np.std(intergranular_pixels) / 255.0 * self.max_eds / self.mean_eds * 100 if len(intergranular_pixels) > 1 else 0
+                        
+                        # Weighted depletion and error
+                        inter_depletion = weight * (100 - inter_mean)
+                        inter_error = weight * inter_std  # Error propagation for (100 - mean)
+                        
+                        bin_intergranular_values.append(inter_depletion)
+                        bin_intergranular_errors.append(inter_error)
                     else:
                         bin_intergranular_values.append(0)
-
+                        bin_intergranular_errors.append(0)
+    
                     # Intragranular depletion (all other pixels not in eds_mask)
                     if self.eds_mask.shape != (0, 0):
-                        intragranular_pixels = eds_gray[row,
-                                                        :][~self.eds_mask[row, :]]
-
+                        intragranular_pixels = eds_gray[row, :][~self.eds_mask[row, :]]
                         intra_width = len(intragranular_pixels)
                         weight = intra_width / total_width
-
+    
                         if len(intragranular_pixels) > 0:
-                            intra_mean = np.mean(
-                                intragranular_pixels) / 255.0 * self.max_eds / self.mean_eds * 100
-                            bin_intragranular_values.append(
-                                weight * (100 - intra_mean))
+                            intra_mean = np.mean(intragranular_pixels) / 255.0 * self.max_eds / self.mean_eds * 100
+                            intra_std = np.std(intragranular_pixels) / 255.0 * self.max_eds / self.mean_eds * 100 if len(intragranular_pixels) > 1 else 0
+                            
+                            # Weighted depletion and error
+                            intra_depletion = weight * (100 - intra_mean)
+                            intra_error = weight * intra_std  # Error propagation for (100 - mean)
+                            
+                            bin_intragranular_values.append(intra_depletion)
+                            bin_intragranular_errors.append(intra_error)
                         else:
                             bin_intragranular_values.append(0)
+                            bin_intragranular_errors.append(0)
                     else:
                         # If no mask, all pixels are considered intragranular
-                        bin_intragranular_values.append(
-                            bin_intergranular_values[-1])
-
-                # Average the values within each bin
+                        bin_intragranular_values.append(bin_intergranular_values[-1])
+                        bin_intragranular_errors.append(bin_intergranular_errors[-1])
+    
+                # Calculate bin averages and propagate errors
                 bin_intergranular_avg = np.mean(bin_intergranular_values)
                 bin_intragranular_avg = np.mean(bin_intragranular_values)
                 bin_total_avg = bin_intergranular_avg + bin_intragranular_avg
-
+    
+                # Error propagation: for independent measurements, std of mean = std/sqrt(n)
+                # For sum of independent variables, variances add
+                bin_intergranular_std = np.sqrt(np.mean(np.array(bin_intergranular_errors)**2))
+                bin_intragranular_std = np.sqrt(np.mean(np.array(bin_intragranular_errors)**2))
+                bin_total_std = np.sqrt(bin_intergranular_std**2 + bin_intragranular_std**2)
+    
                 binned_intergranular_depletion.append(bin_intergranular_avg)
                 binned_intragranular_depletion.append(bin_intragranular_avg)
                 binned_total_depletion.append(bin_total_avg)
-
-            # Store data for saving
+                binned_intergranular_depletion_std.append(bin_intergranular_std)
+                binned_intragranular_depletion_std.append(bin_intragranular_std)
+                binned_total_depletion_std.append(bin_total_std)
+    
+            # Convert to numpy arrays for easier manipulation
+            binned_depth_um = np.array(binned_depth_um)
+            binned_total_depletion = np.array(binned_total_depletion)
+            binned_intergranular_depletion = np.array(binned_intergranular_depletion)
+            binned_intragranular_depletion = np.array(binned_intragranular_depletion)
+            binned_total_depletion_std = np.array(binned_total_depletion_std)
+            binned_intergranular_depletion_std = np.array(binned_intergranular_depletion_std)
+            binned_intragranular_depletion_std = np.array(binned_intragranular_depletion_std)
+    
+            # Store data for saving (including standard deviations)
             self.plot_data = {
-                'depth_um': binned_depth_um,
-                'total_depletion': binned_total_depletion,
-                'intergranular_depletion': binned_intergranular_depletion,
-                'intragranular_depletion': binned_intragranular_depletion
+                'depth_um': binned_depth_um.tolist(),
+                'total_depletion': binned_total_depletion.tolist(),
+                'intergranular_depletion': binned_intergranular_depletion.tolist(),
+                'intragranular_depletion': binned_intragranular_depletion.tolist(),
+                'total_depletion_std': binned_total_depletion_std.tolist(),
+                'intergranular_depletion_std': binned_intergranular_depletion_std.tolist(),
+                'intragranular_depletion_std': binned_intragranular_depletion_std.tolist()
             }
-
-            # Plot 1: Total depletion (scatter plot)
+    
+            # Plot 1: Total depletion (scatter plot with error region)
             self.axes[0, 0].scatter(
-                binned_depth_um, binned_total_depletion, c='blue', alpha=0.7, s=20)
+                binned_depth_um, binned_total_depletion, c='blue', alpha=0.7, s=20, zorder=3)
+            self.axes[0, 0].fill_between(
+                binned_depth_um, 
+                binned_total_depletion - binned_total_depletion_std,
+                binned_total_depletion + binned_total_depletion_std,
+                color='blue', alpha=0.2, zorder=1, label='±1σ')
             self.axes[0, 0].set_title('Total Depletion vs Depth (Binned)')
             self.axes[0, 0].set_xlabel('Depth (μm)')
             self.axes[0, 0].set_ylabel('Total Depletion (%)')
-            self.axes[0, 0].grid(True, alpha=0.3)
-
-            # Plot 2: Intergranular depletion (scatter plot)
+            self.axes[0, 0].grid(True, alpha=0.3, zorder=2)
+            self.axes[0, 0].legend()
+    
+            # Plot 2: Intergranular depletion (scatter plot with error region)
             self.axes[0, 1].scatter(
-                binned_depth_um, binned_intergranular_depletion, c='green', alpha=0.7, s=20)
+                binned_depth_um, binned_intergranular_depletion, c='green', alpha=0.7, s=20, zorder=3)
+            self.axes[0, 1].fill_between(
+                binned_depth_um,
+                binned_intergranular_depletion - binned_intergranular_depletion_std,
+                binned_intergranular_depletion + binned_intergranular_depletion_std,
+                color='green', alpha=0.2, zorder=1, label='±1σ')
             self.axes[0, 1].set_title(
                 'Intergranular Depletion vs Depth (Binned)')
             self.axes[0, 1].set_xlabel('Depth (μm)')
             self.axes[0, 1].set_ylabel('Intergranular Depletion (%)')
-            self.axes[0, 1].grid(True, alpha=0.3)
-
-            # Plot 3: Intragranular depletion (scatter plot)
+            self.axes[0, 1].grid(True, alpha=0.3, zorder=2)
+            self.axes[0, 1].legend()
+    
+            # Plot 3: Intragranular depletion (scatter plot with error region)
             self.axes[1, 0].scatter(
-                binned_depth_um, binned_intragranular_depletion, c='orange', alpha=0.7, s=20)
+                binned_depth_um, binned_intragranular_depletion, c='orange', alpha=0.7, s=20, zorder=3)
+            self.axes[1, 0].fill_between(
+                binned_depth_um,
+                binned_intragranular_depletion - binned_intragranular_depletion_std,
+                binned_intragranular_depletion + binned_intragranular_depletion_std,
+                color='orange', alpha=0.2, zorder=1, label='±1σ')
             self.axes[1, 0].set_title(
                 'Intragranular Depletion vs Depth (Binned)')
             self.axes[1, 0].set_xlabel('Depth (μm)')
             self.axes[1, 0].set_ylabel('Intragranular Depletion (%)')
-            self.axes[1, 0].grid(True, alpha=0.3)
-
-            # Plot 4: Comparison of all three (scatter plots)
+            self.axes[1, 0].grid(True, alpha=0.3, zorder=2)
+            self.axes[1, 0].legend()
+    
+            # Plot 4: Comparison of all three (scatter plots with error regions)
             self.axes[1, 1].scatter(
-                binned_depth_um, binned_total_depletion, c='blue', alpha=0.7, s=20, label='Total')
+                binned_depth_um, binned_total_depletion, c='blue', alpha=0.7, s=20, label='Total', zorder=6)
+            self.axes[1, 1].fill_between(
+                binned_depth_um,
+                binned_total_depletion - binned_total_depletion_std,
+                binned_total_depletion + binned_total_depletion_std,
+                color='blue', alpha=0.15, zorder=1)
+            
             self.axes[1, 1].scatter(
-                binned_depth_um, binned_intergranular_depletion, c='green', alpha=0.7, s=20, label='Intergranular')
+                binned_depth_um, binned_intergranular_depletion, c='green', alpha=0.7, s=20, label='Intergranular', zorder=5)
+            self.axes[1, 1].fill_between(
+                binned_depth_um,
+                binned_intergranular_depletion - binned_intergranular_depletion_std,
+                binned_intergranular_depletion + binned_intergranular_depletion_std,
+                color='green', alpha=0.15, zorder=2)
+            
             self.axes[1, 1].scatter(
-                binned_depth_um, binned_intragranular_depletion, c='orange', alpha=0.7, s=20, label='Intragranular')
+                binned_depth_um, binned_intragranular_depletion, c='orange', alpha=0.7, s=20, label='Intragranular', zorder=4)
+            self.axes[1, 1].fill_between(
+                binned_depth_um,
+                binned_intragranular_depletion - binned_intragranular_depletion_std,
+                binned_intragranular_depletion + binned_intragranular_depletion_std,
+                color='orange', alpha=0.15, zorder=3)
+            
             self.axes[1, 1].set_title('Depletion Comparison (Binned)')
             self.axes[1, 1].set_xlabel('Depth (μm)')
             self.axes[1, 1].set_ylabel('Depletion (%)')
             self.axes[1, 1].legend()
-            self.axes[1, 1].grid(True, alpha=0.3)
-
+            self.axes[1, 1].grid(True, alpha=0.3, zorder=0)
+    
             # Adjust layout and refresh canvas
             self.fig.tight_layout()
             self.plot_canvas.draw()
-
+    
         except Exception as e:
             messagebox.showerror("Error", f"Failed to update plots: {str(e)}")
             print(e)
+
 
     def save_all_data(self):
         """Save all images and plot data to files"""
